@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Lora:ital,wght@0,500;0,600;1,500;1,600&family=Space+Grotesk:wght@400;500;600;700&display=swap");
 
 :root {
   color-scheme: light;
@@ -448,7 +448,7 @@ a:focus-visible,
 .popup-title {
   margin: 0 0 3px;
   color: var(--ink);
-  font-family: "Playfair Display", Georgia, serif;
+  font-family: "Lora", Georgia, serif;
   font-size: 16px;
 }
 
@@ -527,6 +527,38 @@ main,
   letter-spacing: -1px;
 }
 
+.journal-label {
+  position: absolute;
+  z-index: 2;
+  top: 29px;
+  right: 40px;
+  display: grid;
+  gap: 5px;
+  padding: 9px 11px 8px 17px;
+  border: 1px solid rgb(41 35 61 / 65%);
+  border-radius: 2px 8px 6px 2px;
+  color: var(--ink);
+  background:
+    linear-gradient(90deg, transparent 0 8px, rgb(255 101 77 / 45%) 8px 9px, transparent 9px),
+    repeating-linear-gradient(0deg, #fff9ee 0 12px, #e8dfd3 12px 13px);
+  box-shadow: 2px 3px 0 rgb(41 35 61 / 20%);
+  transform: rotate(4deg);
+}
+
+.journal-label span:first-child {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+}
+
+.journal-label span:last-child {
+  color: var(--muted);
+  font-size: 7px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+}
+
 .wordmark-icon {
   width: 35px;
   height: 35px;
@@ -587,20 +619,20 @@ main,
 
 h1,
 h2 {
-  font-family: "Space Grotesk", "DM Sans", sans-serif;
-  font-weight: 700;
+  font-family: "Lora", Georgia, serif;
+  font-weight: 600;
 }
 
 h1 {
   margin-bottom: 20px;
-  font-size: clamp(52px, 7.3vw, 82px);
-  letter-spacing: -5px;
-  line-height: 0.98;
+  font-size: clamp(50px, 6.6vw, 76px);
+  letter-spacing: -3.8px;
+  line-height: 1.02;
 }
 
 h1 span {
   color: var(--green);
-  font-style: normal;
+  font-style: italic;
 }
 
 .intro-copy {
@@ -711,7 +743,8 @@ a:focus-visible,
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  padding-left: 19px;
+  padding-left: 28px;
+  overflow: hidden;
   border: 2px solid var(--ink);
   border-radius: 7px 10px 10px 7px;
   box-shadow: 0 4px 0 var(--ink);
@@ -720,6 +753,37 @@ a:focus-visible,
   font-weight: 700;
   letter-spacing: 1px;
   line-height: 1.2;
+}
+
+.book::before,
+.book::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  content: "";
+}
+
+.book::before {
+  left: 0;
+  width: 13px;
+  border-right: 1px solid rgb(41 35 61 / 28%);
+  background: linear-gradient(90deg, rgb(41 35 61 / 19%), rgb(255 255 255 / 15%));
+}
+
+.book::after {
+  right: 0;
+  width: 11px;
+  border-left: 1px solid rgb(41 35 61 / 20%);
+  background: repeating-linear-gradient(
+    0deg,
+    #fff9ee 0 2px,
+    #e8dfd3 2px 3px
+  );
+}
+
+.book > span {
+  position: relative;
+  z-index: 1;
 }
 
 .book-back {
@@ -843,6 +907,29 @@ h2 {
   transition: transform 160ms ease, box-shadow 160ms ease;
 }
 
+.city-card > span {
+  position: relative;
+  z-index: 1;
+}
+
+.city-card::before {
+  width: 7px;
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: rgb(41 35 61 / 11%);
+  content: "";
+}
+
+.city-card::after {
+  width: 5px;
+  position: absolute;
+  inset: 12px 8px 12px auto;
+  border-left: 1px solid rgb(41 35 61 / 12%);
+  background: repeating-linear-gradient(0deg, rgb(255 249 238 / 65%) 0 2px, rgb(41 35 61 / 9%) 2px 3px);
+  content: "";
+  opacity: 0.7;
+}
+
 .city-card:nth-child(1) {
   --city-color: #ffdd70;
 }
@@ -907,10 +994,10 @@ h2 {
 
 .city-name {
   display: block;
-  font-family: "Space Grotesk", sans-serif;
-  font-size: clamp(20px, 2.2vw, 25px);
-  font-weight: 700;
-  letter-spacing: -1px;
+  font-family: "Lora", Georgia, serif;
+  font-size: clamp(19px, 2.1vw, 24px);
+  font-weight: 600;
+  letter-spacing: -0.5px;
 }
 
 .city-caption {
@@ -990,7 +1077,7 @@ h2 {
 }
 
 .store-name {
-  font-family: "Space Grotesk", sans-serif;
+  font-family: "Lora", Georgia, serif;
   font-size: 15px;
   font-weight: 600;
 }
