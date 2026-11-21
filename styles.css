@@ -1734,9 +1734,34 @@ h2 {
     font-size: 17px;
   }
 
+  .explorer-heading {
+    align-items: flex-start;
+  }
+
+  .change-city {
+    white-space: nowrap;
+  }
+
+  .vibe-tabs {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    overflow: visible;
+    gap: 5px;
+    border-bottom: 0;
+  }
+
   .vibe-tab {
-    padding-inline: 9px;
+    min-width: 0;
+    margin-bottom: 0;
+    padding: 9px 4px;
+    border: 1px solid var(--line);
+    border-radius: 9px;
     font-size: 10px;
+    white-space: nowrap;
+  }
+
+  .vibe-tab[aria-selected="true"] {
+    border-color: var(--orange);
   }
 
   .vibe-chip {
