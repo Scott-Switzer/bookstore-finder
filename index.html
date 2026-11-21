@@ -6,10 +6,10 @@
     <meta name="theme-color" content="#fff9ee">
     <title>bookloop — Find your next bookshop</title>
     <link rel="preconnect" href="https://unpkg.com">
-    <link rel="preconnect" href="https://overpass-api.de">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
     <link rel="stylesheet" href="styles.css">
     <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script defer src="prototype-data.js"></script>
     <script defer src="app.js"></script>
   </head>
   <body>
@@ -18,15 +18,24 @@
         <span class="wordmark-icon" aria-hidden="true">b.</span>
         <span>bookloop<span class="wordmark-period">.</span></span>
       </a>
-      <a class="header-link" href="#about">How it works <span aria-hidden="true">↘</span></a>
+      <nav class="site-nav" aria-label="Main navigation">
+        <a class="nav-link" href="#cities">Bookshops</a>
+        <a class="nav-link" href="events.html">Events <span aria-hidden="true">↗</span></a>
+        <a class="header-link" href="#about">How it works <span aria-hidden="true">↘</span></a>
+      </nav>
     </header>
 
     <main>
+      <aside class="prototype-banner" aria-label="Prototype data notice">
+        <span class="prototype-badge">Prototype</span>
+        <span>Sample bookstores and events are fictional examples for trying the filters.</span>
+      </aside>
+
       <section class="hero" aria-labelledby="page-title">
         <div class="intro">
           <p class="eyebrow"><span class="eyebrow-dot"></span> Your little guide to bookshop-hopping</p>
-          <h1 id="page-title">Go find your<br><span>book people.</span></h1>
-          <p class="intro-copy">Tiny shops, big stories. Pick a city and find a new favorite place to get lost for a while.</p>
+          <h1 id="page-title">Find your next<br><span>bookshop.</span></h1>
+          <p class="intro-copy">Pick a city and find a new favorite place to get lost for a while.</p>
           <a class="primary-link" href="#cities">Pick your city <span aria-hidden="true">↓</span></a>
           <p class="hero-footnote"><span aria-hidden="true">✳</span> Starting in 3 book-loving cities</p>
         </div>
@@ -46,7 +55,7 @@
         <div class="section-heading">
           <div>
             <p class="eyebrow">Pick a place to start</p>
-            <h2 id="city-heading">Where are we wandering?</h2>
+            <h2 id="city-heading">Choose a city.</h2>
           </div>
           <p class="city-hint">Three cities, lots to discover <span aria-hidden="true">↘</span></p>
         </div>
@@ -69,11 +78,29 @@
       <section class="explorer" id="explorer" aria-labelledby="explorer-title" hidden>
         <div class="explorer-heading">
           <div>
-            <p class="eyebrow">Your next stop could be a good one</p>
+            <p class="eyebrow">A shop for your mood</p>
             <h2 id="explorer-title">Bookshops to browse</h2>
           </div>
           <button class="change-city" type="button" id="change-city">← Change city</button>
         </div>
+        <section class="vibe-finder" aria-labelledby="vibe-heading">
+          <div class="vibe-heading-row">
+            <div>
+              <p class="eyebrow">Your kind of bookshop</p>
+              <h3 id="vibe-heading">Pick your bookshop vibe.</h3>
+            </div>
+            <button class="clear-filters" type="button" id="clear-filters">Clear all</button>
+          </div>
+          <div class="vibe-tabs" role="tablist" aria-label="Bookshop vibe categories">
+            <button class="vibe-tab" id="tab-selection" type="button" role="tab" aria-selected="true" aria-controls="vibe-options" data-category="selection">📚 Selection</button>
+            <button class="vibe-tab" id="tab-atmosphere" type="button" role="tab" aria-selected="false" aria-controls="vibe-options" data-category="atmosphere" tabindex="-1">☁️ Atmosphere</button>
+            <button class="vibe-tab" id="tab-experience" type="button" role="tab" aria-selected="false" aria-controls="vibe-options" data-category="experience" tabindex="-1">✨ Experience</button>
+            <button class="vibe-tab" id="tab-practical" type="button" role="tab" aria-selected="false" aria-controls="vibe-options" data-category="practical" tabindex="-1">🧭 Practical</button>
+          </div>
+          <div class="vibe-options" id="vibe-options" role="tabpanel" aria-labelledby="tab-selection"></div>
+          <div class="selected-vibes" id="selected-vibes" aria-label="Selected vibes"></div>
+          <p class="filter-hint">Pick a few: match any vibe in a category, and we’ll match every category you choose.</p>
+        </section>
         <div class="explorer-layout">
           <aside class="results-panel" aria-label="Bookstore results">
             <div class="results-topline">
@@ -81,16 +108,16 @@
               <label class="search-box">
                 <span class="visually-hidden">Search bookstores</span>
                 <span aria-hidden="true">⌕</span>
-                <input id="search" type="search" placeholder="Try a name or neighborhood" autocomplete="off" disabled>
+                <input id="search" type="search" placeholder="Try a shop name or neighborhood" autocomplete="off" disabled>
               </label>
             </div>
             <div id="status" class="status-message" role="status" aria-live="polite"></div>
             <ol class="store-list" id="store-list"></ol>
-            <p class="data-credit">Community-mapped listings; independent status isn’t verified. Data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap contributors</a></p>
+            <p class="data-credit">Fictional prototype listings. Store tags are examples, not verified details.</p>
           </aside>
           <div class="map-frame">
-            <div id="map" role="region" aria-label="Map of bookstores"></div>
-            <p class="map-note">Map tiles © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a></p>
+            <div id="map" role="region" aria-label="Map of sample bookstores"></div>
+            <p class="map-note">Map tiles © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> · sample pins</p>
           </div>
         </div>
       </section>
@@ -99,7 +126,7 @@
         <span class="about-mark" aria-hidden="true">✳</span>
         <div>
           <p class="eyebrow">A small start, with a big love of bookshops</p>
-          <p class="about-copy">bookloop starts in Singapore, New York City, and Chicago. Bookshop locations come from OpenStreetMap, a community-built map. Listings may be incomplete, and independent status isn’t verified—think of these as fun places to start exploring. Know a shop we missed? <a href="https://www.openstreetmap.org/" target="_blank" rel="noreferrer">Help improve the map ↗</a></p>
+          <p class="about-copy">This prototype uses fictional sample bookstore listings and example vibe tags to demonstrate how discovery could work in Singapore, New York City, and Chicago. Real bookstore information, tags, and event listings still need to be sourced and verified.</p>
         </div>
       </section>
     </main>

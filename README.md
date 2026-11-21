@@ -4,19 +4,23 @@ A playful, small static bookstore finder for the pilot cities Singapore, New Yor
 
 ## Run locally
 
-Serve this folder with any static file server (for example, `python -m http.server 8000`) and open the local address in a browser. Serving over HTTP avoids cross-origin restrictions that can affect `file://` pages. The page loads Leaflet from unpkg and requests bookstore listings from the OpenStreetMap Overpass API, so an internet connection is required.
+Serve this folder with any static file server (for example, `python -m http.server 8000`) and open the local address in a browser. Serving over HTTP avoids cross-origin restrictions that can affect `file://` pages. The prototype loads Leaflet and map tiles over the internet.
 
-## Bookstore data
+## Prototype data
 
-The MVP uses OpenStreetMap features tagged `shop=books`; it does not scrape bookstore websites. This keeps the initial data path simple and avoids scraping sites with different terms and formats. Coverage depends on community contributions, so listings may be incomplete. OpenStreetMap does not consistently distinguish independent stores from chains, so the results are leads rather than verified indeIpendent-bookstore recommendations. The app links to OpenStreetMap to help visitors report missing or incorrect locations.
+The bookstore finder and `events.html` use fictional sample records from `prototype-data.js` and `events.js`. These are deliberately labeled as samples in the UI and exist only to make the vibe filters, map pins, city selector, event cards, and date filters testable. They are not real bookstore or event recommendations.
 
-The app queries a radius around each pilot city center. OpenStreetMap data is available under the Open Database License (ODbL); map and data attribution are shown in the interface. The public Overpass service can be rate-limited or temporarily unavailable, in which case the page displays an error and visitors can retry by selecting the city again.
+Vibe categories use OR matching among selected tags within a category, and AND matching between categories. For example, selecting “Used books” and “Sci-fi & fantasy” in Selection matches either tag; adding “Cozy” in Atmosphere then requires the bookstore to also have that atmosphere tag. Search text is applied together with the vibe filters.
+
+## Current data sourcing status
+
+The UI prototype does not scrape directories or fetch live bookstore/event data. For a real launch, replace the example records with verified bookstore and event information from permitted directories, APIs, or owner-submitted sources. Review each source's terms and attribution requirements, retain source links and verification dates, and don't imply independent status or details such as accessibility have been confirmed unless they have.
 
 ## Next steps
 
-### 1. Build a verified indie bookstore directory
+### 1. Replace sample shops with a verified indie bookstore directory
 
-The current map uses OpenStreetMap's `shop=books` tag as a starting point. The next data source should be independent-bookstore directories, which can help identify stores that OSM does not distinguish from chains.
+The map currently uses fictional sample listings so the prototype can demonstrate vibe filtering without presenting unverified locations as real. Replace those examples with independent-bookstore directory data. OpenStreetMap may later be used as an optional location source, but it does not distinguish independent stores from chains consistently.
 
 - Identify reputable directories and sources for Singapore, New York City, and Chicago. Track each source's owner, URL, coverage, last-checked date, terms of use, attribution requirements, and whether automated collection is permitted.
 - Review terms of service, robots.txt, copyright, and applicable privacy rules before scraping. Prefer an official API, downloadable dataset, or permission from the directory when available. Do not bypass access controls or rate limits.
@@ -26,9 +30,9 @@ The current map uses OpenStreetMap's `shop=books` tag as a starting point. The n
 - Keep OSM as an optional location source or fallback, while clearly distinguishing OSM-only results from directory-verified independent bookstores.
 - For a production deployment, run imports on a schedule on a backend, cache results, log source failures, and review changes before publishing. Avoid making a visitor's browser scrape directory websites directly.
 
-### 2. Add bookstore vibe categories and tabs
+### 2. Connect vibe categories to verified bookstore tags
 
-Create a small, consistent tag vocabulary and organize it into category tabs. A first version could include:
+The interactive category tabs and multi-select chips are implemented as a prototype. Connect them to a small, consistent vocabulary of reviewed bookstore tags. A first version could include:
 
 - **Selection:** used books, sci-fi & fantasy, romance, art & design, children's books, local authors, zines & small press.
 - **Atmosphere:** cozy, quiet, bright, spacious, browse-for-hours.
@@ -44,9 +48,9 @@ Keep the first release focused on a manageable set of tags; categories can be ad
 - Start with editor-curated tags for the pilot. If readers or stores can suggest tags later, queue those suggestions for review instead of publishing them immediately.
 - Label tags by provenance so users can tell whether a detail was verified by a bookstore, reviewed by the project, or suggested by the community.
 
-### 3. Add upcoming book events for each pilot city
+### 3. Replace sample events with verified upcoming events
 
-Add an Upcoming Book Events section for Singapore, New York City, and Chicago. The section should be city-specific and include events at listed bookstores as well as a link to the original event listing.
+The separate `events.html` page already demonstrates city and date filtering with fictional sample events. Replace them with verified upcoming events for Singapore, New York City, and Chicago, including links to the original event listing.
 
 - Include the event title, bookstore, city, start date and time, timezone, event page URL, and the date the listing was last checked. Add an end time, cost, or registration link when the source provides it.
 - Collect event information only from sources that permit reuse or provide an API/feed. Check source terms and attribution requirements; link visitors to the source rather than copying unnecessary description text.
@@ -60,6 +64,6 @@ Add an Upcoming Book Events section for Singapore, New York City, and Chicago. T
 1. Select and document permitted directory and event sources for all three cities.
 2. Create normalized bookstore and event data formats, including stable IDs and source attribution.
 3. Import and manually verify a small pilot dataset; keep OSM as a clearly labeled fallback.
-4. Add the vibe-category tabs and filters using curated tags.
-5. Add city-specific upcoming events, then automate refresh and expiry once the source workflow is reliable.
+4. Connect the existing vibe-category tabs and filters to curated tags.
+5. Connect the events page to verified city-specific events, then automate refresh and expiry once the source workflow is reliable.
 6. If the project grows beyond a static prototype, move imports and scheduled refreshes to a small backend with caching, monitoring, and an editorial review process.
