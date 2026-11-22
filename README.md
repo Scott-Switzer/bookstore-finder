@@ -13,7 +13,8 @@ This is the full-stack version of the original static prototype. It runs entirel
 - **Friends** — request by handle, accept, see what friends are reading and which events they're going to. Shelves are friends-only or private.
 - **Recommendations** — bookshops scored from the tags of shops you follow plus your genres; books from the Open Library catalogue.
 - **Shop claims** — booksellers can claim a listing and send corrections, reviewed by a human.
-- **Staff picks** — a claimed shop can hand-sell one book with one sentence, credited to the bookseller and reviewed before it appears. Shown on the shop and as a city strip.
+- **Staff picks** — a claimed shop can hand-sell one book with one sentence, credited to the bookseller and reviewed before it appears. Shown on the shop and as a city strip, with one-click save to a shelf.
+- **Shop pages** — every bookshop has an indexable `/shop/:id` page with a canonical URL, schema.org `BookStore` and `Event` markup, and a place in `/sitemap.xml`.
 
 ## Stack
 
@@ -31,7 +32,7 @@ This is the full-stack version of the original static prototype. It runs entirel
 
 ```bash
 npm install
-npm run db:local                        # runs every migration
+npm run db:local                        # applies pending migrations
 npm run seed:build                       # regenerates data/seed.sql from data/osm-raw.json
 npm run seed:local
 cp .dev.vars.example .dev.vars           # local admin token only
@@ -57,7 +58,7 @@ curl -s -X POST http://localhost:8787/api/admin/staff-picks/<id> \
 ```bash
 npx wrangler login
 npx wrangler d1 create bookloop          # copy the database_id into wrangler.jsonc
-npm run db:remote                       # runs every migration
+npm run db:remote                       # applies pending migrations
 npm run seed:remote
 npx wrangler secret put ADMIN_TOKEN
 npx wrangler deploy
@@ -111,6 +112,7 @@ A staff pick is a hand-sell, not a rating: one book, one sentence, credited to t
 - `source` records `owner` or `editor`; `bookseller`, `section`, `source_url`, `checked_at` and `reviewed_at` keep the provenance visible.
 - Owner submissions land as `pending` and wait in the admin queue. Editor submissions through the admin token publish immediately, matching the event flow.
 - Readers see published picks in the city strip (`GET /api/staff-picks?city=`) and inside the shop detail response.
+- **Save to shelf** resolves the pick's title and author through Open Library on first use, stores the result on `staff_picks.book_id`, and falls back to a local book record if Open Library is unavailable. Repeat saves do not call the API again.
 
 An owner can also submit from the API while signed in:
 
@@ -138,6 +140,7 @@ POST   /api/stores/:id/vibes       DELETE /api/stores/:id/vibes
 POST   /api/stores/:id/claim
 GET    /api/staff-picks?city=&storeId=&limit=
 POST   /api/stores/:id/staff-picks
+POST   /api/staff-picks/:id/save
 GET    /api/events?city=&from=&to=&storeId=
 POST   /api/events                 POST /api/events/:id/rsvp   DELETE /api/events/:id/rsvp
 GET    /api/books/search?q=
@@ -147,7 +150,14 @@ POST   /api/friends/:handle/accept | /decline
 GET    /api/users/:handle          GET /api/feed
 GET    /api/recommendations
 GET    /api/admin/queue            POST /api/admin/events/:id | /claims/:id | /staff-picks/:id
+GET    /shop/:id                   GET /sitemap.xml | /robots.txt
 ```
+
+### Shop pages and search
+
+`GET /shop/:id` is server-rendered from `public/shop-template.html`: the Worker loads the shop, its published events and its staff picks, then replaces the meta and body tokens. The response carries a canonical URL and a schema.org `@graph` with a `BookStore` plus one `Event` per upcoming listing. `public/js/shop.js` only enhances follow, claim and save, so the page is readable and indexable without JavaScript.
+
+`/sitemap.xml` lists the home page, the events page and every indie shop; `/robots.txt` points to it. Set `APP_ORIGIN` to the production origin so canonical URLs and the sitemap use the public hostname rather than whatever host served the request.
 
 ## Security notes
 
@@ -163,4 +173,5 @@ GET    /api/admin/queue            POST /api/admin/events/:id | /claims/:id | /s
 - Vibe tags start empty and are community- or owner-supplied, so recommendations are thin until readers use them.
 - Events are empty until bookshops post or a calendar is imported.
 - Staff picks are empty until a shop claims its listing and submits one, so the city strip stays hidden until the first pick is approved.
+- Shop pages are rendered per request with no edge cache yet; add a KV or Cache API layer before traffic grows.
 - The map uses the public OSM tile service, which is fine for a pilot but should move to self-hosted Protomaps PMTiles on R2 before real traffic.

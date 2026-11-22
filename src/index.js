@@ -11,7 +11,7 @@ import {
   registerVerify,
   requireUser,
 } from "./auth.js";
-import { CITIES, CITY_IDS, EVENT_KINDS, GENRES, TAG_GROUPS, TAG_IDS } from "./config.js";
+import { CITIES, CITY_IDS, EVENT_KINDS, GENRES, TAG_GROUPS, TAG_IDS, TAG_LABELS } from "./config.js";
 import { booksForGenres, cacheBooks, recommendStores, searchOpenLibrary } from "./recommend.js";
 import {
   assert,
@@ -30,6 +30,31 @@ function intParam(value, fallback, max) {
   const number = Number.parseInt(value, 10);
   if (!Number.isFinite(number) || number < 1) return fallback;
   return Math.min(number, max);
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  })[character]);
+}
+
+function displayEventTime(iso, timezone) {
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      timeZone: timezone || "UTC",
+    }).format(new Date(iso));
+  } catch {
+    return iso;
+  }
 }
 
 async function scalar(env, sql, ...params) {
@@ -63,6 +88,7 @@ function shapeStore(row, tags = [], vibes = []) {
 function shapeStaffPick(row) {
   return {
     id: row.id,
+    bookId: row.book_id || null,
     title: row.title,
     author: row.author,
     note: row.note,
@@ -81,6 +107,23 @@ function shapeStaffPick(row) {
         }
       : undefined,
   };
+}
+
+async function withSavedState(env, userId, picks) {
+  if (!userId) return picks.map((pick) => ({ ...pick, saved: false }));
+  const bookIds = [...new Set(picks.map((pick) => pick.bookId).filter(Boolean))];
+  const saved = new Set();
+  for (let start = 0; start < bookIds.length; start += 80) {
+    const ids = bookIds.slice(start, start + 80);
+    const placeholders = ids.map(() => "?").join(",");
+    const { results } = await env.DB.prepare(
+      `SELECT book_id FROM shelf WHERE user_id = ? AND book_id IN (${placeholders})`,
+    )
+      .bind(userId, ...ids)
+      .all();
+    for (const row of results || []) saved.add(row.book_id);
+  }
+  return picks.map((pick) => ({ ...pick, saved: pick.bookId ? saved.has(pick.bookId) : false }));
 }
 
 async function decorateStores(env, rows, userId) {
@@ -312,6 +355,7 @@ async function getStore(request, env, { id }) {
   const pendingPickCount = ownerClaim
     ? await scalar(env, "SELECT COUNT(*) FROM staff_picks WHERE store_id = ? AND status = 'pending'", id)
     : 0;
+  const staffPicks = await withSavedState(env, user?.id, (pickRows || []).map(shapeStaffPick));
   return json({
     store: {
       ...store,
@@ -319,7 +363,7 @@ async function getStore(request, env, { id }) {
       claimed: claimed > 0,
       canManagePicks: Boolean(ownerClaim),
       pendingPickCount,
-      staffPicks: (pickRows || []).map(shapeStaffPick),
+      staffPicks,
       events: (events || []).map((event) => ({
         id: event.id,
         title: event.title,
@@ -427,7 +471,8 @@ async function getStaffPicks(request, env) {
   )
     .bind(...params, limit)
     .all();
-  return json({ picks: (results || []).map(shapeStaffPick) });
+  const user = await currentUser(request, env);
+  return json({ picks: await withSavedState(env, user?.id, (results || []).map(shapeStaffPick)) });
 }
 
 async function postStaffPick(request, env, { id }) {
@@ -488,6 +533,68 @@ async function postStaffPick(request, env, { id }) {
     },
     201,
   );
+}
+
+async function postSaveStaffPick(request, env, { id }) {
+  assertSameOrigin(request, env);
+  const user = await requireUser(request, env);
+  const pick = await env.DB.prepare("SELECT * FROM staff_picks WHERE id = ? AND status = 'published'")
+    .bind(id)
+    .first();
+  assert(pick, 404, "Staff pick not found");
+
+  let book = pick.book_id
+    ? await env.DB.prepare("SELECT * FROM books WHERE id = ?").bind(pick.book_id).first()
+    : null;
+
+  if (!book) {
+    try {
+      const query = [pick.title, pick.author].filter(Boolean).join(" ");
+      const matches = await searchOpenLibrary(env, query, 5);
+      const normalize = (value) => String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+      const best = matches.find((item) => normalize(item.title) === normalize(pick.title)) || matches[0];
+      if (best) {
+        book = { id: best.id, title: best.title, author: best.author, cover_url: best.coverUrl };
+      }
+    } catch (error) {
+      console.error("staff pick book lookup failed", error.message);
+    }
+  }
+
+  // Keep the save working when Open Library cannot answer: store the pick's own
+  // title and author as a local book record.
+  if (!book) {
+    const fallbackId = `pick:${pick.id}`;
+    const existing = await env.DB.prepare("SELECT * FROM books WHERE id = ?").bind(fallbackId).first();
+    if (!existing) {
+      await env.DB.prepare(
+        "INSERT INTO books (id, title, author, subjects, checked_at) VALUES (?, ?, ?, '[]', ?)",
+      )
+        .bind(fallbackId, pick.title, pick.author, nowIso())
+        .run();
+    }
+    book = await env.DB.prepare("SELECT * FROM books WHERE id = ?").bind(fallbackId).first();
+  }
+
+  if (pick.book_id !== book.id) {
+    await env.DB.prepare("UPDATE staff_picks SET book_id = ? WHERE id = ?").bind(book.id, pick.id).run();
+  }
+
+  const existingShelf = await env.DB.prepare("SELECT status FROM shelf WHERE user_id = ? AND book_id = ?")
+    .bind(user.id, book.id)
+    .first();
+  if (!existingShelf) {
+    await env.DB.prepare("INSERT INTO shelf (user_id, book_id, status) VALUES (?, ?, 'want')")
+      .bind(user.id, book.id)
+      .run();
+  }
+
+  return json({
+    ok: true,
+    alreadyOnShelf: Boolean(existingShelf),
+    shelfStatus: existingShelf?.status || "want",
+    book: { id: book.id, title: book.title, author: book.author, coverUrl: book.cover_url },
+  });
 }
 
 /* ---------------------------------------------------------------- events */
@@ -672,7 +779,7 @@ async function putShelf(request, env, { bookId }) {
   assertSameOrigin(request, env);
   const user = await requireUser(request, env);
   const id = decodeURIComponent(bookId);
-  assert(id.startsWith("/works/"), 400, "Unknown book id");
+  assert(id.startsWith("/works/") || id.startsWith("pick:"), 400, "Unknown book id");
   const body = await readJson(request);
   const status = body.status || "want";
   assert(["want", "reading", "read"].includes(status), 400, "Status must be want, reading or read");
@@ -1004,6 +1111,225 @@ async function getHealth(request, env) {
   });
 }
 
+/* -------------------------------------------------------------- shop pages */
+
+async function getSitemap(request, env) {
+  const origin = (env.APP_ORIGIN || new URL(request.url).origin).replace(/\/$/, "");
+  const { results } = await env.DB.prepare("SELECT id, checked_at FROM stores WHERE is_indie = 1 ORDER BY name").all();
+  const entries = [
+    `<url><loc>${escapeHtml(`${origin}/`)}</loc><changefreq>daily</changefreq><priority>1.0</priority></url>`,
+    `<url><loc>${escapeHtml(`${origin}/events`)}</loc><changefreq>daily</changefreq><priority>0.8</priority></url>`,
+    ...(results || []).map((row) => {
+      const lastmod = row.checked_at ? `<lastmod>${escapeHtml(String(row.checked_at).slice(0, 10))}</lastmod>` : "";
+      return `<url><loc>${escapeHtml(`${origin}/shop/${encodeURIComponent(row.id)}`)}</loc>${lastmod}<changefreq>weekly</changefreq><priority>0.7</priority></url>`;
+    }),
+  ];
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${entries.join("")}</urlset>`;
+  return new Response(xml, {
+    headers: { "content-type": "application/xml; charset=utf-8", "cache-control": "public, max-age=3600" },
+  });
+}
+
+function getRobots(request, env) {
+  const origin = (env.APP_ORIGIN || new URL(request.url).origin).replace(/\/$/, "");
+  return new Response(`User-agent: *\nAllow: /\n\nSitemap: ${origin}/sitemap.xml\n`, {
+    headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "public, max-age=3600" },
+  });
+}
+
+async function getShopPage(request, env, id, url) {
+  const row = await env.DB.prepare("SELECT * FROM stores WHERE id = ?").bind(id).first();
+  if (!row) {
+    return new Response("Bookshop not found. Browse the directory at /#cities", {
+      status: 404,
+      headers: { "content-type": "text/plain; charset=utf-8" },
+    });
+  }
+
+  const user = await currentUser(request, env);
+  const [store] = await decorateStores(env, [row], user?.id);
+  const [{ results: events }, { results: pickRows }, favoritedRow, approvedClaims] = await Promise.all([
+    env.DB.prepare(
+      `SELECT * FROM events WHERE store_id = ? AND status = 'published' AND starts_at >= ? ORDER BY starts_at LIMIT 12`,
+    )
+      .bind(id, nowIso())
+      .all(),
+    env.DB.prepare(
+      `SELECT * FROM staff_picks WHERE store_id = ? AND status = 'published' ORDER BY created_at DESC LIMIT 12`,
+    )
+      .bind(id)
+      .all(),
+    user
+      ? env.DB.prepare("SELECT 1 FROM favorites WHERE user_id = ? AND store_id = ?").bind(user.id, id).first()
+      : null,
+    scalar(env, "SELECT COUNT(*) FROM store_claims WHERE store_id = ? AND status = 'approved'", id),
+  ]);
+  const picks = await withSavedState(env, user?.id, (pickRows || []).map(shapeStaffPick));
+  const city = CITIES.find((item) => item.id === row.city);
+  const cityLabel = city?.name || row.city;
+  const origin = (env.APP_ORIGIN || url.origin).replace(/\/$/, "");
+  const canonical = `${origin}/shop/${encodeURIComponent(row.id)}`;
+  const favorited = Boolean(favoritedRow);
+  const claimed = approvedClaims > 0;
+
+  const facts = [
+    row.address ? `<div><dt>Address</dt><dd>${escapeHtml(row.address)}</dd></div>` : "",
+    row.opening_hours ? `<div><dt>Hours</dt><dd>${escapeHtml(row.opening_hours)}</dd></div>` : "",
+    row.website
+      ? `<div><dt>Website</dt><dd><a href="${escapeHtml(row.website)}" target="_blank" rel="noreferrer">${escapeHtml(row.website.replace(/^https?:\/\//, ""))}</a></dd></div>`
+      : "",
+    row.phone ? `<div><dt>Phone</dt><dd>${escapeHtml(row.phone)}</dd></div>` : "",
+  ].join("");
+
+  const vibeItems = store.vibes.length
+    ? [...store.vibes]
+        .sort((a, b) => b.count - a.count)
+        .map(
+          (vibe) =>
+            `<span class="vibe-pill">${escapeHtml(TAG_LABELS.get(vibe.tag) || vibe.tag.replace(/-/g, " "))} <b>${vibe.count}</b></span>`,
+        )
+        .join("")
+    : '<span class="muted">No reader vibes yet. Sign in on the map view to add one.</span>';
+
+  const officialItems = store.tags
+    .filter((tag) => tag.source !== "community")
+    .map(
+      (tag) =>
+        `<span class="vibe-pill vibe-official">${escapeHtml(TAG_LABELS.get(tag.tag) || tag.tag)} <small>${escapeHtml(tag.source)}</small></span>`,
+    )
+    .join(" ");
+
+  const pickItems = picks.length
+    ? `<ul class="detail-picks">${picks
+        .map(
+          (pick) => `<li>
+            <p class="detail-pick-title">${escapeHtml(pick.title)}${pick.author ? ` <small>by ${escapeHtml(pick.author)}</small>` : ""}</p>
+            <p class="detail-pick-note">“${escapeHtml(pick.note)}”</p>
+            <p class="detail-pick-credit">${pick.bookseller ? `${escapeHtml(pick.bookseller)} · ` : ""}${pick.source === "editor" ? "bookloop pick" : "shop pick"}${pick.section ? ` · ${escapeHtml(pick.section)}` : ""}</p>
+            <p><button class="btn btn-small ${pick.saved ? "btn-following" : ""}" type="button" data-save-pick="${escapeHtml(pick.id)}" ${pick.saved ? "disabled" : ""}>${pick.saved ? "On your shelf ✓" : "Save to shelf"}</button></p>
+          </li>`,
+        )
+        .join("")}</ul>`
+    : '<p class="muted">No staff picks yet. They are hand-sells, not ratings: one book, one sentence from someone who works here.</p>';
+
+  const eventItems = events?.length
+    ? `<ul class="detail-events">${events
+        .map(
+          (event) => `<li>
+            <span class="detail-event-date">${escapeHtml(displayEventTime(event.starts_at, event.timezone))}</span>
+            <span><a href="${escapeHtml(event.url || "/events")}"${event.url ? ' target="_blank" rel="noreferrer"' : ""}>${escapeHtml(event.title)}</a>
+            <small>${escapeHtml(event.kind)}</small></span>
+          </li>`,
+        )
+        .join("")}</ul>`
+    : '<p class="muted">No upcoming events listed yet. <a href="/events">See the calendar</a>.</p>';
+
+  const body = `
+    <a class="shop-back" href="/#cities">← All bookshops</a>
+    <p class="eyebrow">${escapeHtml(store.neighborhood || cityLabel)} · ${escapeHtml(cityLabel)}</p>
+    <h1 class="detail-title">${escapeHtml(store.name)}</h1>
+    <p class="detail-meta">
+      <span class="store-badge">${store.isIndie ? "Independent" : "Chain"}</span>
+      ${claimed ? '<span class="store-badge badge-owner">Shop-claimed</span>' : ""}
+      <span class="detail-source">Source: <a href="${escapeHtml(store.sourceUrl || "https://www.openstreetmap.org/copyright")}" target="_blank" rel="noreferrer">OpenStreetMap</a></span>
+      <a class="detail-source" href="https://www.openstreetmap.org/?mlat=${store.lat}&mlon=${store.lon}#map=17/${store.lat}/${store.lon}" target="_blank" rel="noreferrer">Open map ↗</a>
+    </p>
+    <div class="detail-actions">
+      <button class="btn ${favorited ? "btn-following" : "btn-primary"}" type="button" id="follow-store" data-following="${favorited}">
+        ${favorited ? "Following ✓" : "Follow this shop"}
+      </button>
+      <a class="btn btn-ghost" href="/events">See all events ↗</a>
+      <button class="btn btn-ghost" type="button" id="claim-toggle">I run this shop</button>
+    </div>
+    <dl class="detail-facts">${facts}</dl>
+
+    <section class="detail-section">
+      <h3>What readers say</h3>
+      <div class="vibe-cloud">${vibeItems}</div>
+      ${officialItems ? `<p class="detail-sub">Listing details: ${officialItems}</p>` : ""}
+    </section>
+
+    <section class="detail-section">
+      <h3>Staff picks</h3>
+      ${pickItems}
+    </section>
+
+    <section class="detail-section">
+      <h3>Coming up</h3>
+      ${eventItems}
+    </section>
+
+    <section class="detail-section claim-section" id="claim-section" hidden>
+      <h3>Claim this shop</h3>
+      <p class="muted">Tell us how to reach you. A person checks every claim before anything changes, and claiming is free.</p>
+      <form id="claim-form" class="stack-form">
+        <label class="field"><span>Email or phone</span><input name="contact" required maxlength="200" placeholder="hello@yourshop.com"></label>
+        <label class="field"><span>Your role</span><input name="role" maxlength="80" placeholder="Owner, events manager, bookseller…"></label>
+        <label class="field"><span>Anything we should fix?</span><textarea name="message" maxlength="600" rows="3" placeholder="Hours changed, new website, events every Thursday…"></textarea></label>
+        <button class="btn btn-primary" type="submit">Send claim</button>
+      </form>
+    </section>`;
+
+  const bits = [];
+  if (events?.length) bits.push(`${events.length} upcoming event${events.length === 1 ? "" : "s"}`);
+  if (picks.length) bits.push(`${picks.length} staff pick${picks.length === 1 ? "" : "s"}`);
+  const description = `${row.name} is a bookshop in ${cityLabel}. ${bits.length ? `${bits.join(" · ")}. ` : ""}Address, opening hours and how to visit.`;
+  const title = `${row.name} — ${cityLabel} bookshop | bookloop`;
+
+  const postalAddress = {
+    "@type": "PostalAddress",
+    ...(row.address ? { streetAddress: row.address } : {}),
+    addressLocality: cityLabel,
+    addressCountry: row.city === "singapore" ? "SG" : "US",
+  };
+  const graph = [
+    {
+      "@type": "BookStore",
+      "@id": `${canonical}#bookstore`,
+      name: row.name,
+      url: canonical,
+      address: postalAddress,
+      geo: { "@type": "GeoCoordinates", latitude: row.lat, longitude: row.lon },
+      ...(row.website ? { sameAs: [row.website] } : {}),
+      ...(row.phone ? { telephone: row.phone } : {}),
+      ...(row.opening_hours ? { openingHours: row.opening_hours } : {}),
+    },
+    ...(events || []).map((event) => ({
+      "@type": "Event",
+      name: event.title,
+      startDate: event.starts_at,
+      ...(event.ends_at ? { endDate: event.ends_at } : {}),
+      ...(event.url ? { url: event.url } : {}),
+      ...(event.description ? { description: event.description } : {}),
+      location: { "@type": "BookStore", name: row.name, address: postalAddress },
+    })),
+  ];
+  const jsonLd = JSON.stringify({ "@context": "https://schema.org", "@graph": graph }).replace(/</g, "\\u003c");
+  const meta = `
+    <title>${escapeHtml(title)}</title>
+    <meta name="description" content="${escapeHtml(description)}">
+    <link rel="canonical" href="${escapeHtml(canonical)}">
+    <meta name="robots" content="index,follow">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="${escapeHtml(title)}">
+    <meta property="og:description" content="${escapeHtml(description)}">
+    <meta property="og:url" content="${escapeHtml(canonical)}">
+    <script type="application/ld+json">${jsonLd}</script>`;
+
+  const templateResponse = await env.ASSETS.fetch(new Request(new URL("/shop-template.html", url)));
+  if (!templateResponse.ok) {
+    return new Response("Shop page template is missing.", {
+      status: 500,
+      headers: { "content-type": "text/plain; charset=utf-8" },
+    });
+  }
+  let html = await templateResponse.text();
+  html = html.replace("<!--SHOP_META-->", meta).replace("<!--SHOP_BODY-->", body);
+  return new Response(html, {
+    headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
+  });
+}
+
 /* ---------------------------------------------------------------- router */
 
 const routes = [
@@ -1028,6 +1354,7 @@ const routes = [
   ["POST", /^\/api\/stores\/(?<id>[^/]+)\/claim$/, postClaim],
   ["GET", /^\/api\/staff-picks$/, getStaffPicks],
   ["POST", /^\/api\/stores\/(?<id>[^/]+)\/staff-picks$/, postStaffPick],
+  ["POST", /^\/api\/staff-picks\/(?<id>[^/]+)\/save$/, postSaveStaffPick],
   ["GET", /^\/api\/events$/, getEvents],
   ["POST", /^\/api\/events$/, postEvent],
   ["POST", /^\/api\/events\/(?<id>[^/]+)\/rsvp$/, postRsvp],
@@ -1065,6 +1392,29 @@ async function handleApi(request, env, url) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+
+    if (url.pathname === "/shop-template.html") {
+      return new Response("Not found", { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
+    }
+    if (url.pathname === "/robots.txt") return getRobots(request, env);
+    if (url.pathname === "/sitemap.xml") return getSitemap(request, env);
+    if (url.pathname === "/shop" || url.pathname === "/shop/") {
+      return Response.redirect(new URL("/#cities", request.url).toString(), 302);
+    }
+    const shopMatch = /^\/shop\/([^/]+)\/?$/.exec(url.pathname);
+    if (shopMatch && request.method === "GET") {
+      try {
+        return await getShopPage(request, env, decodeURIComponent(shopMatch[1]), url);
+      } catch (error) {
+        if (error instanceof HttpError) return fail(error.status, error.message);
+        console.error("Shop page failed", error.stack || error);
+        return new Response("This bookshop page could not load.", {
+          status: 500,
+          headers: { "content-type": "text/plain; charset=utf-8" },
+        });
+      }
+    }
+
     if (!url.pathname.startsWith("/api/")) {
       return env.ASSETS.fetch(request);
     }

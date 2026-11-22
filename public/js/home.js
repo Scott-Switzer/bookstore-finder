@@ -7,6 +7,7 @@ import {
   openAuth,
   relativeDays,
   requireAuth,
+  saveStaffPick,
   state,
   tagEmoji,
   tagLabel,
@@ -306,6 +307,11 @@ function pickCard(pick) {
       <h3 class="pick-title">${escapeHtml(pick.title)}</h3>
       ${pick.author ? `<p class="pick-author">by ${escapeHtml(pick.author)}</p>` : ""}
       <p class="pick-note">“${escapeHtml(pick.note)}”</p>
+      <div class="pick-actions">
+        <button class="btn btn-small ${pick.saved ? "btn-following" : ""}" type="button" data-save-pick="${escapeHtml(pick.id)}" ${pick.saved ? "disabled" : ""}>
+          ${pick.saved ? "On your shelf ✓" : "Save to shelf"}
+        </button>
+      </div>
       <p class="pick-credit">
         ${pick.bookseller ? `${escapeHtml(pick.bookseller)} · ` : ""}${pick.source === "editor" ? "bookloop pick" : "shop pick"}
         ${pick.sourceUrl ? ` · <a href="${escapeHtml(pick.sourceUrl)}" target="_blank" rel="noreferrer">source</a>` : ""}
@@ -329,6 +335,9 @@ async function loadCityPicks(cityId) {
     cityPicks.innerHTML = picks.map(pickCard).join("");
     for (const button of cityPicks.querySelectorAll("[data-pick-store]")) {
       button.addEventListener("click", () => openStore(button.dataset.pickStore));
+    }
+    for (const button of cityPicks.querySelectorAll("[data-save-pick]")) {
+      button.addEventListener("click", () => saveStaffPick(button.dataset.savePick, button));
     }
   } catch {
     picksSection.hidden = true;
@@ -361,6 +370,7 @@ function renderStoreDetail(store) {
       <span class="store-badge">${store.isIndie ? "Independent" : "Chain"}</span>
       ${store.claimed ? '<span class="store-badge badge-owner">Shop-claimed</span>' : ""}
       <span class="detail-source">Source: <a href="${escapeHtml(store.sourceUrl)}" target="_blank" rel="noreferrer">OpenStreetMap</a></span>
+      <a class="detail-source" href="/shop/${encodeURIComponent(store.id)}">Full page ↗</a>
     </p>
     <div class="detail-actions">
       <button class="btn ${store.favorited ? "btn-following" : "btn-primary"}" type="button" id="follow-store">
@@ -425,6 +435,7 @@ function renderStoreDetail(store) {
                   <p class="detail-pick-title">${escapeHtml(pick.title)}${pick.author ? ` <small>by ${escapeHtml(pick.author)}</small>` : ""}</p>
                   <p class="detail-pick-note">“${escapeHtml(pick.note)}”</p>
                   <p class="detail-pick-credit">${pick.bookseller ? `${escapeHtml(pick.bookseller)} · ` : ""}${pick.source === "editor" ? "bookloop pick" : "shop pick"}${pick.section ? ` · ${escapeHtml(pick.section)}` : ""}</p>
+                  <p><button class="btn btn-small ${pick.saved ? "btn-following" : ""}" type="button" data-save-pick="${escapeHtml(pick.id)}" ${pick.saved ? "disabled" : ""}>${pick.saved ? "On your shelf ✓" : "Save to shelf"}</button></p>
                 </li>`,
               )
               .join("")}</ul>`
@@ -530,6 +541,10 @@ function renderStoreDetail(store) {
       button.disabled = false;
     }
   });
+
+  for (const button of storeDetail.querySelectorAll("[data-save-pick]")) {
+    button.addEventListener("click", () => saveStaffPick(button.dataset.savePick, button));
+  }
 
   const pickForm = storeDetail.querySelector("#pick-form");
   if (pickForm) {

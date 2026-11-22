@@ -1507,3 +1507,39 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* --------------------------------------------------------------- shop page */
+
+.shop-page {
+  padding: 36px 0 70px;
+}
+
+.shop-back {
+  display: inline-block;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--ink);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.shop-back:hover {
+  background: var(--yellow);
+}
+
+.shop-page .detail-title {
+  font-size: clamp(34px, 6vw, 56px);
+}
+
+.shop-page .detail-actions {
+  flex-wrap: wrap;
+}
+
+.shop-page .detail-section {
+  margin-top: 34px;
+}
+
+.pick-actions {
+  margin-top: 10px;
+}

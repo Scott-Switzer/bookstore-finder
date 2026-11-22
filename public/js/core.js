@@ -424,6 +424,22 @@ export function requireAuth(message = "Sign in to keep a shelf and follow booksh
   return false;
 }
 
+export async function saveStaffPick(pickId, button) {
+  if (!requireAuth("Sign in to save staff picks to your shelf.")) return false;
+  button.disabled = true;
+  try {
+    const result = await api(`/api/staff-picks/${encodeURIComponent(pickId)}/save`, { method: "POST" });
+    button.textContent = "On your shelf ✓";
+    button.classList.add("btn-following");
+    toast(result.alreadyOnShelf ? "Already on your shelf" : `Saved “${result.book.title}” to your shelf`);
+    return true;
+  } catch (error) {
+    toast(error.message, "error");
+    button.disabled = false;
+    return false;
+  }
+}
+
 /* ------------------------------------------------------------------- init */
 
 export async function boot() {
