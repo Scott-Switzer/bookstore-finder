@@ -179,29 +179,69 @@ function jsonLdNodes(html) {
   return nodes;
 }
 
-function parseJsonLd(html, feedUrl) {
-  const events = [];
-  for (const node of jsonLdNodes(html)) {
-    for (const event of collectEvents(node)) {
-      const title = stripHtml(event.name);
-      const startsAt = event.startDate ? new Date(event.startDate) : null;
-      if (!title || !startsAt || Number.isNaN(startsAt.getTime())) continue;
-      if (String(event.eventStatus || "").toLowerCase().includes("cancel")) continue;
-      const endsAt = event.endDate ? new Date(event.endDate) : null;
-      const identifier =
-        typeof event.identifier === "string" ? event.identifier : event.identifier?.value || null;
-      const uid = String(event.url || event["@id"] || identifier || `${title}-${startsAt.toISOString()}`);
-      const url = absoluteHttpUrl(event.url, feedUrl) || feedUrl;
-      events.push({
-        uid,
-        title: title.slice(0, 140),
-        startsAt,
-        endsAt: endsAt && !Number.isNaN(endsAt.getTime()) && endsAt > startsAt ? endsAt : null,
-        timezone: "UTC",
-        description: stripHtml(event.description).slice(0, 600) || null,
-        url,
-      });
+function identifierText(identifier) {
+  if (identifier === null || identifier === undefined) return null;
+  if (typeof identifier === "string" || typeof identifier === "number") {
+    return String(identifier).trim() || null;
+  }
+  if (Array.isArray(identifier)) {
+    for (const item of identifier) {
+      const value = identifierText(item);
+      if (value) return value;
     }
+    return null;
+  }
+  if (typeof identifier === "object") return identifierText(identifier.value);
+  return null;
+}
+
+function parseJsonLd(html, feedUrl) {
+  const found = [];
+  for (const node of jsonLdNodes(html)) found.push(...collectEvents(node));
+
+  // Many shops point every listing at the same calendar page, and some reuse a
+  // single @id for the whole page. Those fields only name an event when they
+  // are unique among the events on the page; otherwise every listing would
+  // collapse into one identity and the rest would be dropped as duplicates.
+  const seen = new Map();
+  const note = (value) => {
+    if (!value) return;
+    const key = String(value).toLowerCase();
+    seen.set(key, (seen.get(key) || 0) + 1);
+  };
+  for (const event of found) {
+    note(absoluteHttpUrl(event.url, feedUrl));
+    if (typeof event["@id"] === "string") note(event["@id"].trim());
+  }
+  const isUnique = (value) => {
+    if (!value) return false;
+    const key = String(value).toLowerCase();
+    return key !== String(feedUrl || "").toLowerCase() && seen.get(key) === 1;
+  };
+
+  const events = [];
+  for (const event of found) {
+    const title = stripHtml(event.name);
+    const startsAt = event.startDate ? new Date(event.startDate) : null;
+    if (!title || !startsAt || Number.isNaN(startsAt.getTime())) continue;
+    if (String(event.eventStatus || "").toLowerCase().includes("cancel")) continue;
+    const endsAt = event.endDate ? new Date(event.endDate) : null;
+    const atId = typeof event["@id"] === "string" ? event["@id"].trim() : null;
+    const url = absoluteHttpUrl(event.url, feedUrl);
+    const uid =
+      identifierText(event.identifier) ||
+      (isUnique(atId) ? atId : null) ||
+      (isUnique(url) ? url : null) ||
+      `${title}-${startsAt.toISOString()}`;
+    events.push({
+      uid,
+      title: title.slice(0, 140),
+      startsAt,
+      endsAt: endsAt && !Number.isNaN(endsAt.getTime()) && endsAt > startsAt ? endsAt : null,
+      timezone: "UTC",
+      description: stripHtml(event.description).slice(0, 600) || null,
+      url: url || feedUrl,
+    });
   }
   return events;
 }
@@ -221,7 +261,20 @@ export function parseFeed(body, { url = "", format = "auto", contentType = "" } 
   const deduped = new Map();
   for (const event of events) {
     if (!event?.uid) continue;
-    deduped.set(event.uid.toLowerCase(), event);
+    let key = event.uid.toLowerCase();
+    const existing = deduped.get(key);
+    if (existing) {
+      const sameListing =
+        existing.title === event.title && existing.startsAt?.getTime() === event.startsAt?.getTime();
+      // An exact repeat is the same listing. Different events that happen to
+      // share an upstream identifier are numbered so neither is silently lost.
+      if (sameListing) continue;
+      let suffix = 2;
+      while (deduped.has(`${key}#${suffix}`)) suffix += 1;
+      event.uid = `${event.uid}#${suffix}`;
+      key = `${key}#${suffix}`;
+    }
+    deduped.set(key, event);
   }
   return { format: chosen, events: [...deduped.values()] };
 }
