@@ -7,7 +7,7 @@ This is the full-stack version of the original static prototype. It runs entirel
 ## What it does
 
 - **Bookshops** — 349 real shops imported from OpenStreetMap, filtered by city, search and vibe tags, with a map and a detail panel.
-- **Events** — upcoming readings, book clubs and signings, with RSVP, plus a free submission form for booksellers (every listing is reviewed before it appears).
+- **Events** — upcoming readings, book clubs and signings, with RSVP, plus a free submission form for booksellers. A per-shop feed registry checks published ICS and JSON-LD calendars on a cron; imports land in the same review queue with their source intact.
 - **Accounts** — passkey sign-in (Face ID / Touch ID / screen lock). No passwords, no email, no auth vendor.
 - **Shelf and taste** — save books as want / reading / read, rate them, pick genres.
 - **Friends** — request by handle, accept, see what friends are reading and which events they're going to. Shelves are friends-only or private.
@@ -36,7 +36,8 @@ npm run db:local                        # applies pending migrations
 npm run seed:build                       # regenerates data/seed.sql from data/osm-raw.json
 npm run seed:local
 cp .dev.vars.example .dev.vars           # local admin token only
-npm run dev
+npm run dev                              # normal dev server
+# npm run dev:scheduled                  # also enables /__scheduled for cron testing
 ```
 
 Open **http://localhost:8787** (if that port is taken, run `npm run dev -- --port 8791`). Use `localhost`, not `127.0.0.1`: a WebAuthn relying party ID cannot be an IP address, so passkeys will fail on `127.0.0.1`.
@@ -92,17 +93,22 @@ Add curated tags in `data/tag-overrides.json` keyed by store id if you want to c
 There is no free, national API of indie bookshop events: Eventbrite removed public event search in 2019, and the ABA/IndieCommerce calendars are per-store. The two paths that scale without paying for data are:
 
 1. **Bookseller submissions** — `POST /api/events`, reviewed in the admin queue. This is the primary path and the partnership hook.
-2. **The shop's own published calendar** — `scripts/ingest-events.mjs` reads an iCalendar feed or schema.org `Event` JSON-LD from the shop's events page and writes reviewed SQL:
+2. **The shop's own published calendar** — register an iCalendar feed or schema.org `Event` JSON-LD page per shop. The Worker checks due feeds from a Cron Trigger every ten minutes (eight per run, default six-hour interval per feed), parses them, and inserts new events as `pending`. The admin queue shows `source`, `source_url` and the registry feed, so a person still approves what readers see.
 
 ```bash
-node scripts/ingest-events.mjs \
-  --store osm-node-123456 \
-  --url https://shop.example/events \
-  --out data/events.sql
-npx wrangler d1 execute bookloop --remote --file=./data/events.sql
+# Add or update a shop feed (format is auto, ics or jsonld)
+curl -s -X POST http://localhost:8787/api/admin/event-feeds \
+  -H 'content-type: application/json' -H 'x-admin-token: local-admin-token' \
+  -d '{"storeId":"osm-node-123456","url":"https://shop.example/events.ics","format":"auto"}'
+
+# Run it now instead of waiting for the cron
+curl -s -X POST http://localhost:8787/api/admin/event-feeds/<feed-id>/run \
+  -H 'x-admin-token: local-admin-token'
 ```
 
-Check `robots.txt` and each shop's terms first, keep the source URL, and do not import calendars the shop has not published for reuse. Imported rows are marked `source = 'jsonld'` and keep their `source_url`.
+Feeds are deduped by a stable store + upstream-UID hash and by store + title + start time, so overlapping calendars do not create duplicate rows. Re-runs update `pending` imports; published or rejected events are never rewritten by a feed. ETag/Last-Modified are used for cheap 304 checks, and failures are recorded as `last_error` with a consecutive-failure count. Deleting a feed keeps its events and their source URLs. A feed cannot unpublish or cancel an already reviewed event; a human handles removals and corrections.
+
+`scripts/ingest-events.mjs` still exists for a one-off reviewed SQL import using the same parser. Check `robots.txt` and each shop's terms first, keep the source URL, and do not import calendars the shop has not published for reuse. Imported rows use `source = 'ics'` or `'jsonld'` and keep their `source_url`.
 
 ### Staff picks
 
@@ -150,6 +156,9 @@ POST   /api/friends/:handle/accept | /decline
 GET    /api/users/:handle          GET /api/feed
 GET    /api/recommendations
 GET    /api/admin/queue            POST /api/admin/events/:id | /claims/:id | /staff-picks/:id
+GET    /api/admin/event-feeds      POST /api/admin/event-feeds
+PATCH  /api/admin/event-feeds/:id  DELETE /api/admin/event-feeds/:id
+POST   /api/admin/event-feeds/:id/run
 GET    /shop/:id                   GET /sitemap.xml | /robots.txt
 ```
 
@@ -165,13 +174,14 @@ GET    /shop/:id                   GET /sitemap.xml | /robots.txt
 - Sessions: random 32-byte tokens, only the SHA-256 hash is stored, `HttpOnly; SameSite=Lax`, 30 days, `Secure` over HTTPS.
 - CSRF: mutating routes reject a mismatched `Origin`.
 - Moderation: `ADMIN_TOKEN` is a Worker secret; if unset, admin routes return 503.
+- Feed ingestion: only http(s) URLs are accepted; localhost and private addresses are rejected outside development. Responses are capped at 1 MB, fetches time out after eight seconds, and imports never auto-publish.
 - No email is collected, which keeps the app free but means account recovery depends on the saved recovery code. Adding verified email later needs a transactional email provider.
 
 ## Known limits
 
 - OSM coverage is uneven and occasionally stale; hours and websites need shop confirmation.
 - Vibe tags start empty and are community- or owner-supplied, so recommendations are thin until readers use them.
-- Events are empty until bookshops post or a calendar is imported.
+- Events are empty until bookshops post or a published feed is registered. Feeds are only as fresh as the shop's own calendar, and the ten-minute cron is a due-check, not a guarantee that every shop is current.
 - Staff picks are empty until a shop claims its listing and submits one, so the city strip stays hidden until the first pick is approved.
 - Shop pages are rendered per request with no edge cache yet; add a KV or Cache API layer before traffic grows.
 - The map uses the public OSM tile service, which is fine for a pilot but should move to self-hosted Protomaps PMTiles on R2 before real traffic.

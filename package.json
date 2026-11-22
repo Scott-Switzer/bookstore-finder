@@ -6,6 +6,7 @@
   "description": "Find independent bookshops, their events, and your next read.",
   "scripts": {
     "dev": "wrangler dev",
+    "dev:scheduled": "wrangler dev --test-scheduled",
     "deploy": "wrangler deploy",
     "db:local": "wrangler d1 migrations apply bookloop --local",
     "db:remote": "wrangler d1 migrations apply bookloop --remote",

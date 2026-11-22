@@ -12,6 +12,7 @@ import {
   requireUser,
 } from "./auth.js";
 import { CITIES, CITY_IDS, EVENT_KINDS, GENRES, TAG_GROUPS, TAG_IDS, TAG_LABELS } from "./config.js";
+import { runDueFeeds, runFeedById } from "./event-ingest.js";
 import { booksForGenres, cacheBooks, recommendStores, searchOpenLibrary } from "./recommend.js";
 import {
   assert,
@@ -1050,8 +1051,11 @@ async function getAdminQueue(request, env) {
   requireAdmin(request, env);
   const [{ results: events }, { results: claims }, { results: staffPicks }] = await Promise.all([
     env.DB.prepare(
-      `SELECT e.id, e.title, e.kind, e.starts_at, e.url, e.created_at, s.name AS store_name
-       FROM events e LEFT JOIN stores s ON s.id = e.store_id
+      `SELECT e.id, e.title, e.kind, e.starts_at, e.url, e.source, e.source_url,
+              e.feed_id, f.url AS feed_url, e.created_at, s.name AS store_name
+       FROM events e
+       LEFT JOIN stores s ON s.id = e.store_id
+       LEFT JOIN event_feeds f ON f.id = e.feed_id
        WHERE e.status = 'pending' ORDER BY e.created_at LIMIT 100`,
     ).all(),
     env.DB.prepare(
@@ -1100,6 +1104,196 @@ async function postAdminStaffPick(request, env, { id }) {
     .run();
   assert(changed.meta.changes > 0, 404, "Staff pick not found");
   return json({ ok: true, status });
+}
+
+const FEED_FORMATS = ["auto", "ics", "jsonld"];
+
+function feedUrl(value, env, request) {
+  const raw = str(value, { max: 500, field: "Feed URL" });
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new HttpError(400, "Feed URL must be a valid http:// or https:// URL");
+  }
+  assert(["http:", "https:"].includes(url.protocol), 400, "Feed URL must start with http:// or https://");
+  assert(!url.username && !url.password, 400, "Feed URL must not contain credentials");
+
+  const host = url.hostname.toLowerCase();
+  const localHost = host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+  const privateHost = /^(10\.|127\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|0\.)/.test(host);
+  const requestHost = new URL(request.url).hostname.toLowerCase();
+  const localAdmin = env.APP_ENV === "development" && ["localhost", "127.0.0.1", "::1"].includes(requestHost);
+  assert(localAdmin || (!localHost && !privateHost), 400, "Feed URL must be a public address");
+  return url.toString();
+}
+
+function feedFormat(value) {
+  const format = value === undefined ? "auto" : str(value, { max: 20, field: "Feed format" });
+  assert(FEED_FORMATS.includes(format), 400, "Feed format must be auto, ics or jsonld");
+  return format;
+}
+
+function feedInterval(value) {
+  if (value === undefined) return 360;
+  const minutes = Number(value);
+  assert(Number.isInteger(minutes) && minutes >= 15 && minutes <= 10080, 400, "Check interval must be 15-10080 minutes");
+  return minutes;
+}
+
+function feedEnabled(value) {
+  if (value === undefined) return 1;
+  assert(typeof value === "boolean", 400, "enabled must be true or false");
+  return value ? 1 : 0;
+}
+
+function shapeFeed(row) {
+  return {
+    id: row.id,
+    storeId: row.store_id,
+    storeName: row.store_name || null,
+    city: row.city || null,
+    url: row.url,
+    format: row.format,
+    enabled: Boolean(row.enabled),
+    checkIntervalMinutes: Number(row.check_interval_minutes),
+    lastCheckedAt: row.last_checked_at,
+    lastSuccessAt: row.last_success_at,
+    lastError: row.last_error,
+    lastEventCount: Number(row.last_event_count || 0),
+    consecutiveFailures: Number(row.consecutive_failures || 0),
+    due: Boolean(row.due),
+    eventCount: Number(row.event_count || 0),
+    pendingCount: Number(row.pending_count || 0),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+async function getEventFeed(env, id) {
+  return env.DB.prepare(
+    `SELECT f.*, s.name AS store_name, s.city,
+       (SELECT COUNT(*) FROM events e WHERE e.feed_id = f.id) AS event_count,
+       (SELECT COUNT(*) FROM events e WHERE e.feed_id = f.id AND e.status = 'pending') AS pending_count,
+       CASE WHEN f.enabled = 1 AND (f.last_checked_at IS NULL
+         OR datetime(f.last_checked_at) <= datetime('now', '-' || f.check_interval_minutes || ' minutes'))
+         THEN 1 ELSE 0 END AS due
+     FROM event_feeds f JOIN stores s ON s.id = f.store_id WHERE f.id = ?`,
+  )
+    .bind(id)
+    .first();
+}
+
+async function getAdminFeeds(request, env) {
+  requireAdmin(request, env);
+  const { results } = await env.DB.prepare(
+    `SELECT f.*, s.name AS store_name, s.city,
+       (SELECT COUNT(*) FROM events e WHERE e.feed_id = f.id) AS event_count,
+       (SELECT COUNT(*) FROM events e WHERE e.feed_id = f.id AND e.status = 'pending') AS pending_count,
+       CASE WHEN f.enabled = 1 AND (f.last_checked_at IS NULL
+         OR datetime(f.last_checked_at) <= datetime('now', '-' || f.check_interval_minutes || ' minutes'))
+         THEN 1 ELSE 0 END AS due
+     FROM event_feeds f JOIN stores s ON s.id = f.store_id
+     ORDER BY s.name, f.url LIMIT 200`,
+  ).all();
+  return json({ feeds: (results || []).map(shapeFeed) });
+}
+
+async function postAdminFeed(request, env) {
+  requireAdmin(request, env);
+  const body = await readJson(request);
+  const storeId = str(body.storeId, { min: 1, max: 80, field: "Bookshop" });
+  const store = await env.DB.prepare("SELECT id, name, city FROM stores WHERE id = ?").bind(storeId).first();
+  assert(store, 404, "Bookshop not found");
+  const url = feedUrl(body.url, env, request);
+  const format = feedFormat(body.format);
+  const interval = feedInterval(body.checkIntervalMinutes);
+  const enabled = feedEnabled(body.enabled);
+  const existing = await env.DB.prepare("SELECT * FROM event_feeds WHERE store_id = ? AND url = ?")
+    .bind(storeId, url)
+    .first();
+  const id = existing?.id || `feed_${crypto.randomUUID()}`;
+  if (existing) {
+    const reset = existing.format !== format;
+    await env.DB.prepare(
+      `UPDATE event_feeds SET format = ?, enabled = ?, check_interval_minutes = ?, etag = ?, last_modified = ?,
+         last_checked_at = ?, last_error = ?, consecutive_failures = ?, updated_at = ? WHERE id = ?`,
+    )
+      .bind(
+        format,
+        enabled,
+        interval,
+        reset ? null : existing.etag,
+        reset ? null : existing.last_modified,
+        reset ? null : existing.last_checked_at,
+        reset ? null : existing.last_error,
+        reset ? 0 : existing.consecutive_failures,
+        nowIso(),
+        id,
+      )
+      .run();
+  } else {
+    await env.DB.prepare(
+      `INSERT INTO event_feeds (id, store_id, url, format, enabled, check_interval_minutes)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+      .bind(id, storeId, url, format, enabled, interval)
+      .run();
+  }
+  return json({ feed: shapeFeed(await getEventFeed(env, id)) }, existing ? 200 : 201);
+}
+
+async function patchAdminFeed(request, env, { id }) {
+  requireAdmin(request, env);
+  const existing = await env.DB.prepare("SELECT * FROM event_feeds WHERE id = ?").bind(id).first();
+  assert(existing, 404, "Feed not found");
+  const body = await readJson(request);
+  const url = body.url === undefined ? existing.url : feedUrl(body.url, env, request);
+  const format = body.format === undefined ? existing.format : feedFormat(body.format);
+  const interval = body.checkIntervalMinutes === undefined ? existing.check_interval_minutes : feedInterval(body.checkIntervalMinutes);
+  const enabled = body.enabled === undefined ? existing.enabled : feedEnabled(body.enabled);
+  if (url !== existing.url) {
+    const duplicate = await env.DB.prepare(
+      "SELECT id FROM event_feeds WHERE store_id = ? AND url = ? AND id <> ?",
+    )
+      .bind(existing.store_id, url, id)
+      .first();
+    assert(!duplicate, 409, "This shop already has a feed at that URL");
+  }
+  const reset = url !== existing.url || format !== existing.format;
+  await env.DB.prepare(
+    `UPDATE event_feeds SET url = ?, format = ?, enabled = ?, check_interval_minutes = ?,
+       etag = ?, last_modified = ?, last_checked_at = ?, last_error = ?, consecutive_failures = ?, updated_at = ? WHERE id = ?`,
+  )
+    .bind(
+      url,
+      format,
+      enabled,
+      interval,
+      reset ? null : existing.etag,
+      reset ? null : existing.last_modified,
+      reset ? null : existing.last_checked_at,
+      reset ? null : existing.last_error,
+      reset ? 0 : existing.consecutive_failures,
+      nowIso(),
+      id,
+    )
+    .run();
+  return json({ feed: shapeFeed(await getEventFeed(env, id)) });
+}
+
+async function deleteAdminFeed(request, env, { id }) {
+  requireAdmin(request, env);
+  const changed = await env.DB.prepare("DELETE FROM event_feeds WHERE id = ?").bind(id).run();
+  assert(changed.meta.changes > 0, 404, "Feed not found");
+  return json({ ok: true });
+}
+
+async function postAdminFeedRun(request, env, { id }) {
+  requireAdmin(request, env);
+  const result = await runFeedById(env, id, { force: true });
+  assert(result, 404, "Feed not found");
+  return json({ run: result }, result.ok ? 200 : 502);
 }
 
 async function getHealth(request, env) {
@@ -1375,6 +1569,11 @@ const routes = [
   ["POST", /^\/api\/admin\/events\/(?<id>[^/]+)$/, postAdminEvent],
   ["POST", /^\/api\/admin\/claims\/(?<id>[^/]+)$/, postAdminClaim],
   ["POST", /^\/api\/admin\/staff-picks\/(?<id>[^/]+)$/, postAdminStaffPick],
+  ["GET", /^\/api\/admin\/event-feeds$/, getAdminFeeds],
+  ["POST", /^\/api\/admin\/event-feeds$/, postAdminFeed],
+  ["PATCH", /^\/api\/admin\/event-feeds\/(?<id>[^/]+)$/, patchAdminFeed],
+  ["DELETE", /^\/api\/admin\/event-feeds\/(?<id>[^/]+)$/, deleteAdminFeed],
+  ["POST", /^\/api\/admin\/event-feeds\/(?<id>[^/]+)\/run$/, postAdminFeedRun],
 ];
 
 async function handleApi(request, env, url) {
@@ -1390,6 +1589,15 @@ async function handleApi(request, env, url) {
 }
 
 export default {
+  async scheduled(controller, env) {
+    try {
+      const result = await runDueFeeds(env);
+      if (result.checked) console.log("event feed cron", JSON.stringify(result));
+    } catch (error) {
+      console.error("event feed cron failed", error.stack || error);
+    }
+  },
+
   async fetch(request, env) {
     const url = new URL(request.url);
 
