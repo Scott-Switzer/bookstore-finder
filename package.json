@@ -7,8 +7,8 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "db:local": "wrangler d1 execute bookloop --local --file=./migrations/0001_init.sql",
-    "db:remote": "wrangler d1 execute bookloop --remote --file=./migrations/0001_init.sql",
+    "db:local": "wrangler d1 execute bookloop --local --file=./migrations/0001_init.sql && wrangler d1 execute bookloop --local --file=./migrations/0002_staff_picks.sql",
+    "db:remote": "wrangler d1 execute bookloop --remote --file=./migrations/0001_init.sql && wrangler d1 execute bookloop --remote --file=./migrations/0002_staff_picks.sql",
     "seed:build": "node scripts/build-seed.mjs",
     "seed:local": "wrangler d1 execute bookloop --local --file=./data/seed.sql",
     "seed:remote": "wrangler d1 execute bookloop --remote --file=./data/seed.sql",

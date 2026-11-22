@@ -25,6 +25,9 @@ const vibeOptions = document.querySelector("#vibe-options");
 const selectedVibes = document.querySelector("#selected-vibes");
 const storeDialog = document.querySelector("#store-dialog");
 const storeDetail = document.querySelector("#store-detail");
+const picksSection = document.querySelector("#picks-section");
+const picksTitle = document.querySelector("#picks-title");
+const cityPicks = document.querySelector("#city-picks");
 
 let activeCity = null;
 let cityStores = [];
@@ -266,6 +269,8 @@ async function loadCity(cityId) {
     button.setAttribute("aria-pressed", String(button.dataset.city === cityId));
   }
 
+  loadCityPicks(cityId);
+
   // The map must exist before results render, or there is no layer for the pins.
   const instance = ensureMap();
   if (instance) {
@@ -288,6 +293,48 @@ async function loadCity(cityId) {
   explorer.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
+/* ------------------------------------------------------------ staff picks */
+
+function pickCard(pick) {
+  const store = pick.store;
+  return `
+    <article class="pick-card">
+      <p class="pick-shop">
+        <button class="link-button" type="button" data-pick-store="${escapeHtml(store.id)}">${escapeHtml(store.name)}</button>
+        <span>${escapeHtml(store.neighborhood || cityName(store.city))}</span>
+      </p>
+      <h3 class="pick-title">${escapeHtml(pick.title)}</h3>
+      ${pick.author ? `<p class="pick-author">by ${escapeHtml(pick.author)}</p>` : ""}
+      <p class="pick-note">“${escapeHtml(pick.note)}”</p>
+      <p class="pick-credit">
+        ${pick.bookseller ? `${escapeHtml(pick.bookseller)} · ` : ""}${pick.source === "editor" ? "bookloop pick" : "shop pick"}
+        ${pick.sourceUrl ? ` · <a href="${escapeHtml(pick.sourceUrl)}" target="_blank" rel="noreferrer">source</a>` : ""}
+      </p>
+    </article>`;
+}
+
+async function loadCityPicks(cityId) {
+  const city = state.config.cities.find((item) => item.id === cityId);
+  picksTitle.textContent = `Picked by booksellers in ${city.name}.`;
+  picksSection.hidden = true;
+  cityPicks.innerHTML = "";
+  try {
+    const { picks } = await api(`/api/staff-picks?city=${encodeURIComponent(cityId)}&limit=6`);
+    if (activeCity !== cityId) return;
+    picksSection.hidden = false;
+    if (!picks.length) {
+      cityPicks.innerHTML = `<p class="pick-empty">No staff picks in ${escapeHtml(city.name)} yet. If you run a shop, <a href="#bookshops">claim it</a> and add the book you are hand-selling this week.</p>`;
+      return;
+    }
+    cityPicks.innerHTML = picks.map(pickCard).join("");
+    for (const button of cityPicks.querySelectorAll("[data-pick-store]")) {
+      button.addEventListener("click", () => openStore(button.dataset.pickStore));
+    }
+  } catch {
+    picksSection.hidden = true;
+  }
+}
+
 /* ------------------------------------------------------------- store view */
 
 async function openStore(id) {
@@ -305,6 +352,7 @@ function renderStoreDetail(store) {
   const community = new Map(store.vibes.map((vibe) => [vibe.tag, vibe.count]));
   const official = store.tags.filter((tag) => tag.source !== "community");
   const signedIn = Boolean(state.me?.user);
+  const picks = store.staffPicks || [];
 
   storeDetail.innerHTML = `
     <p class="eyebrow">${escapeHtml(store.neighborhood || cityName(store.city))} · ${escapeHtml(cityName(store.city))}</p>
@@ -364,6 +412,55 @@ function renderStoreDetail(store) {
               <button class="btn btn-small" type="button" id="vibe-add">Add vibe</button>
             </div>`
           : `<p class="muted"><button class="link-button" type="button" id="vibe-signin">Sign in</button> to add a vibe.</p>`
+      }
+    </section>
+
+    <section class="detail-section">
+      <h3>Staff picks</h3>
+      ${
+        picks.length
+          ? `<ul class="detail-picks">${picks
+              .map(
+                (pick) => `<li>
+                  <p class="detail-pick-title">${escapeHtml(pick.title)}${pick.author ? ` <small>by ${escapeHtml(pick.author)}</small>` : ""}</p>
+                  <p class="detail-pick-note">“${escapeHtml(pick.note)}”</p>
+                  <p class="detail-pick-credit">${pick.bookseller ? `${escapeHtml(pick.bookseller)} · ` : ""}${pick.source === "editor" ? "bookloop pick" : "shop pick"}${pick.section ? ` · ${escapeHtml(pick.section)}` : ""}</p>
+                </li>`,
+              )
+              .join("")}</ul>`
+          : '<p class="muted">No staff picks yet. They are hand-sells, not ratings: one book, one sentence from someone who works here.</p>'
+      }
+      ${
+        store.canManagePicks
+          ? `<p class="pick-pending">${store.pendingPickCount ? `${store.pendingPickCount} pick${store.pendingPickCount === 1 ? "" : "s"} waiting for review. ` : ""}New picks appear after a quick review.</p>
+            <details class="pick-form-wrap">
+              <summary>Add a staff pick</summary>
+              <p class="muted">One book, one sentence on why you love it. A person checks it before it appears.</p>
+              <form id="pick-form" class="stack-form">
+                <label class="field"><span>Book title</span>
+                  <input name="title" required maxlength="200" placeholder="The book you are hand-selling">
+                </label>
+                <label class="field"><span>Author (optional)</span>
+                  <input name="author" maxlength="160">
+                </label>
+                <label class="field"><span>Why you love it</span>
+                  <textarea name="note" required minlength="10" maxlength="280" rows="3" placeholder="One or two sentences, in your own voice."></textarea>
+                </label>
+                <div class="field-row">
+                  <label class="field"><span>Your name</span>
+                    <input name="bookseller" maxlength="80" value="${escapeHtml(state.me?.user?.displayName || "")}">
+                  </label>
+                  <label class="field"><span>Where it sits (optional)</span>
+                    <input name="section" maxlength="60" placeholder="Poetry table, second floor">
+                  </label>
+                </div>
+                <label class="field"><span>Link (optional)</span>
+                  <input name="sourceUrl" type="url" maxlength="500" placeholder="https://yourshop.com/…">
+                </label>
+                <button class="btn btn-primary" type="submit">Send pick for review</button>
+              </form>
+            </details>`
+          : ""
       }
     </section>
 
@@ -433,6 +530,35 @@ function renderStoreDetail(store) {
       button.disabled = false;
     }
   });
+
+  const pickForm = storeDetail.querySelector("#pick-form");
+  if (pickForm) {
+    pickForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const data = Object.fromEntries(new FormData(form));
+      const button = form.querySelector('button[type="submit"]');
+      button.disabled = true;
+      try {
+        const result = await api(`/api/stores/${encodeURIComponent(store.id)}/staff-picks`, {
+          method: "POST",
+          body: {
+            title: data.title,
+            author: data.author || null,
+            note: data.note,
+            bookseller: data.bookseller || null,
+            section: data.section || null,
+            sourceUrl: data.sourceUrl || null,
+          },
+        });
+        toast(result.message);
+        await openStore(store.id);
+      } catch (error) {
+        toast(error.message, "error");
+        button.disabled = false;
+      }
+    });
+  }
 
   const vibeAdd = storeDetail.querySelector("#vibe-add");
   if (vibeAdd) {

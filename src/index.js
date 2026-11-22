@@ -60,6 +60,29 @@ function shapeStore(row, tags = [], vibes = []) {
   };
 }
 
+function shapeStaffPick(row) {
+  return {
+    id: row.id,
+    title: row.title,
+    author: row.author,
+    note: row.note,
+    bookseller: row.bookseller,
+    section: row.section,
+    source: row.source,
+    sourceUrl: row.source_url,
+    checkedAt: row.checked_at,
+    createdAt: row.created_at,
+    store: row.store_name
+      ? {
+          id: row.store_id,
+          name: row.store_name,
+          city: row.store_city,
+          neighborhood: row.store_neighborhood,
+        }
+      : undefined,
+  };
+}
+
 async function decorateStores(env, rows, userId) {
   if (!rows.length) return [];
   const tagsByStore = new Map();
@@ -274,11 +297,29 @@ async function getStore(request, env, { id }) {
       )
     : false;
   const claimed = await scalar(env, "SELECT COUNT(*) FROM store_claims WHERE store_id = ? AND status = 'approved'", id);
+  const ownerClaim = user
+    ? await env.DB.prepare(
+        "SELECT 1 FROM store_claims WHERE store_id = ? AND user_id = ? AND status = 'approved'",
+      )
+        .bind(id, user.id)
+        .first()
+    : null;
+  const { results: pickRows } = await env.DB.prepare(
+    "SELECT * FROM staff_picks WHERE store_id = ? AND status = 'published' ORDER BY created_at DESC LIMIT 8",
+  )
+    .bind(id)
+    .all();
+  const pendingPickCount = ownerClaim
+    ? await scalar(env, "SELECT COUNT(*) FROM staff_picks WHERE store_id = ? AND status = 'pending'", id)
+    : 0;
   return json({
     store: {
       ...store,
       favorited,
       claimed: claimed > 0,
+      canManagePicks: Boolean(ownerClaim),
+      pendingPickCount,
+      staffPicks: (pickRows || []).map(shapeStaffPick),
       events: (events || []).map((event) => ({
         id: event.id,
         title: event.title,
@@ -356,6 +397,97 @@ async function postClaim(request, env, { id }) {
     .bind(`claim_${crypto.randomUUID()}`, id, user?.id || null, contact, role, message)
     .run();
   return json({ ok: true, message: "Thanks. A human will check this claim before anything changes." }, 201);
+}
+
+/* ------------------------------------------------------------ staff picks */
+
+async function getStaffPicks(request, env) {
+  const url = new URL(request.url);
+  const city = url.searchParams.get("city");
+  const storeId = url.searchParams.get("storeId");
+  const limit = intParam(url.searchParams.get("limit"), 12, 50);
+  assert(!city || CITY_IDS.includes(city), 400, "Unknown city");
+
+  const where = ["p.status = 'published'"];
+  const params = [];
+  if (city) {
+    where.push("s.city = ?");
+    params.push(city);
+  }
+  if (storeId) {
+    where.push("p.store_id = ?");
+    params.push(storeId);
+  }
+
+  const { results } = await env.DB.prepare(
+    `SELECT p.*, s.name AS store_name, s.city AS store_city, s.neighborhood AS store_neighborhood
+     FROM staff_picks p JOIN stores s ON s.id = p.store_id
+     WHERE ${where.join(" AND ")}
+     ORDER BY p.created_at DESC LIMIT ?`,
+  )
+    .bind(...params, limit)
+    .all();
+  return json({ picks: (results || []).map(shapeStaffPick) });
+}
+
+async function postStaffPick(request, env, { id }) {
+  assertSameOrigin(request, env);
+  const user = await currentUser(request, env);
+  const admin = Boolean(env.ADMIN_TOKEN) && request.headers.get("x-admin-token") === env.ADMIN_TOKEN;
+  assert(user || admin, 401, "Sign in to add a staff pick");
+
+  const store = await env.DB.prepare("SELECT id, name FROM stores WHERE id = ?").bind(id).first();
+  assert(store, 404, "Bookshop not found");
+  const owner = user
+    ? await env.DB.prepare(
+        "SELECT 1 FROM store_claims WHERE store_id = ? AND user_id = ? AND status = 'approved'",
+      )
+        .bind(id, user.id)
+        .first()
+    : null;
+  assert(admin || owner, 403, "Only the shop's claimed owner can add staff picks");
+
+  const body = await readJson(request);
+  const title = str(body.title, { min: 1, max: 200, field: "Book title" });
+  const note = str(body.note, { min: 10, max: 280, field: "Why you love it" });
+  const author = optionalStr(body.author, { max: 160, field: "Author" });
+  const bookseller = optionalStr(body.bookseller, { max: 80, field: "Bookseller" });
+  const section = optionalStr(body.section, { max: 60, field: "Section" });
+  const sourceUrl = optionalStr(body.sourceUrl, { max: 500, field: "Link" });
+  if (sourceUrl) assert(/^https?:\/\//.test(sourceUrl), 400, "Link must start with http:// or https://");
+
+  const source = owner ? "owner" : "editor";
+  const status = admin ? "published" : "pending";
+  const pickId = `pick_${crypto.randomUUID()}`;
+  await env.DB.prepare(
+    `INSERT INTO staff_picks (id, store_id, title, author, note, bookseller, section, source, source_url, status, submitted_by, reviewed_at, checked_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  )
+    .bind(
+      pickId,
+      id,
+      title,
+      author,
+      note,
+      bookseller || (user ? user.display_name : "bookloop editor"),
+      section,
+      source,
+      sourceUrl,
+      status,
+      user?.id || null,
+      admin ? nowIso() : null,
+      nowIso(),
+    )
+    .run();
+
+  return json(
+    {
+      id: pickId,
+      status,
+      message: admin ? "Staff pick published." : "Thanks. Your pick goes live after a quick review.",
+    },
+    201,
+  );
 }
 
 /* ---------------------------------------------------------------- events */
@@ -809,7 +941,7 @@ async function getRecommendations(request, env) {
 
 async function getAdminQueue(request, env) {
   requireAdmin(request, env);
-  const [{ results: events }, { results: claims }] = await Promise.all([
+  const [{ results: events }, { results: claims }, { results: staffPicks }] = await Promise.all([
     env.DB.prepare(
       `SELECT e.id, e.title, e.kind, e.starts_at, e.url, e.created_at, s.name AS store_name
        FROM events e LEFT JOIN stores s ON s.id = e.store_id
@@ -820,8 +952,13 @@ async function getAdminQueue(request, env) {
        FROM store_claims c JOIN stores s ON s.id = c.store_id
        WHERE c.status = 'pending' ORDER BY c.created_at LIMIT 100`,
     ).all(),
+    env.DB.prepare(
+      `SELECT p.id, p.title, p.author, p.note, p.bookseller, p.created_at, s.name AS store_name, s.id AS store_id
+       FROM staff_picks p JOIN stores s ON s.id = p.store_id
+       WHERE p.status = 'pending' ORDER BY p.created_at LIMIT 100`,
+    ).all(),
   ]);
-  return json({ events: events || [], claims: claims || [] });
+  return json({ events: events || [], claims: claims || [], staffPicks: staffPicks || [] });
 }
 
 async function postAdminEvent(request, env, { id }) {
@@ -843,6 +980,18 @@ async function postAdminClaim(request, env, { id }) {
   const status = body.action === "approve" ? "approved" : "rejected";
   const changed = await env.DB.prepare("UPDATE store_claims SET status = ? WHERE id = ?").bind(status, id).run();
   assert(changed.meta.changes > 0, 404, "Claim not found");
+  return json({ ok: true, status });
+}
+
+async function postAdminStaffPick(request, env, { id }) {
+  requireAdmin(request, env);
+  const body = await readJson(request);
+  assert(["approve", "reject"].includes(body.action), 400, "Action must be approve or reject");
+  const status = body.action === "approve" ? "published" : "rejected";
+  const changed = await env.DB.prepare("UPDATE staff_picks SET status = ?, reviewed_at = ? WHERE id = ?")
+    .bind(status, nowIso(), id)
+    .run();
+  assert(changed.meta.changes > 0, 404, "Staff pick not found");
   return json({ ok: true, status });
 }
 
@@ -877,6 +1026,8 @@ const routes = [
   ["POST", /^\/api\/stores\/(?<id>[^/]+)\/favorite$/, postFavorite],
   ["DELETE", /^\/api\/stores\/(?<id>[^/]+)\/favorite$/, deleteFavorite],
   ["POST", /^\/api\/stores\/(?<id>[^/]+)\/claim$/, postClaim],
+  ["GET", /^\/api\/staff-picks$/, getStaffPicks],
+  ["POST", /^\/api\/stores\/(?<id>[^/]+)\/staff-picks$/, postStaffPick],
   ["GET", /^\/api\/events$/, getEvents],
   ["POST", /^\/api\/events$/, postEvent],
   ["POST", /^\/api\/events\/(?<id>[^/]+)\/rsvp$/, postRsvp],
@@ -896,6 +1047,7 @@ const routes = [
   ["GET", /^\/api\/admin\/queue$/, getAdminQueue],
   ["POST", /^\/api\/admin\/events\/(?<id>[^/]+)$/, postAdminEvent],
   ["POST", /^\/api\/admin\/claims\/(?<id>[^/]+)$/, postAdminClaim],
+  ["POST", /^\/api\/admin\/staff-picks\/(?<id>[^/]+)$/, postAdminStaffPick],
 ];
 
 async function handleApi(request, env, url) {

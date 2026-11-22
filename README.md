@@ -13,6 +13,7 @@ This is the full-stack version of the original static prototype. It runs entirel
 - **Friends** — request by handle, accept, see what friends are reading and which events they're going to. Shelves are friends-only or private.
 - **Recommendations** — bookshops scored from the tags of shops you follow plus your genres; books from the Open Library catalogue.
 - **Shop claims** — booksellers can claim a listing and send corrections, reviewed by a human.
+- **Staff picks** — a claimed shop can hand-sell one book with one sentence, credited to the bookseller and reviewed before it appears. Shown on the shop and as a city strip.
 
 ## Stack
 
@@ -30,7 +31,7 @@ This is the full-stack version of the original static prototype. It runs entirel
 
 ```bash
 npm install
-npx wrangler d1 execute bookloop --local --file=./migrations/0001_init.sql
+npm run db:local                        # runs every migration
 npm run seed:build                       # regenerates data/seed.sql from data/osm-raw.json
 npm run seed:local
 cp .dev.vars.example .dev.vars           # local admin token only
@@ -46,6 +47,9 @@ curl -s http://localhost:8787/api/admin/queue -H 'x-admin-token: local-admin-tok
 curl -s -X POST http://localhost:8787/api/admin/events/<id> \
   -H 'content-type: application/json' -H 'x-admin-token: local-admin-token' \
   -d '{"action":"approve"}'
+curl -s -X POST http://localhost:8787/api/admin/staff-picks/<id> \
+  -H 'content-type: application/json' -H 'x-admin-token: local-admin-token' \
+  -d '{"action":"approve"}'
 ```
 
 ## Deploy to your own Cloudflare account
@@ -53,7 +57,7 @@ curl -s -X POST http://localhost:8787/api/admin/events/<id> \
 ```bash
 npx wrangler login
 npx wrangler d1 create bookloop          # copy the database_id into wrangler.jsonc
-npx wrangler d1 execute bookloop --remote --file=./migrations/0001_init.sql
+npm run db:remote                       # runs every migration
 npm run seed:remote
 npx wrangler secret put ADMIN_TOKEN
 npx wrangler deploy
@@ -99,6 +103,24 @@ npx wrangler d1 execute bookloop --remote --file=./data/events.sql
 
 Check `robots.txt` and each shop's terms first, keep the source URL, and do not import calendars the shop has not published for reuse. Imported rows are marked `source = 'jsonld'` and keep their `source_url`.
 
+### Staff picks
+
+A staff pick is a hand-sell, not a rating: one book, one sentence, credited to the person who works there.
+
+- Only an **approved claim holder** for that shop can submit one from the shop panel. Admins with `ADMIN_TOKEN` can submit to any shop.
+- `source` records `owner` or `editor`; `bookseller`, `section`, `source_url`, `checked_at` and `reviewed_at` keep the provenance visible.
+- Owner submissions land as `pending` and wait in the admin queue. Editor submissions through the admin token publish immediately, matching the event flow.
+- Readers see published picks in the city strip (`GET /api/staff-picks?city=`) and inside the shop detail response.
+
+An owner can also submit from the API while signed in:
+
+```bash
+curl -s -X POST http://localhost:8787/api/stores/<storeId>/staff-picks \
+  -H 'content-type: application/json' \
+  -b 'bl_session=<session token>' \
+  -d '{"title":"Book title","author":"Author","note":"Why I love it.","bookseller":"Sam","section":"Poetry table"}'
+```
+
 ## API
 
 All responses are JSON. Mutating routes require `Origin` to match the deployment and, unless noted, a session cookie.
@@ -114,6 +136,8 @@ GET    /api/stores?city=&q=&tag=   GET /api/stores/:id
 POST   /api/stores/:id/favorite    DELETE /api/stores/:id/favorite
 POST   /api/stores/:id/vibes       DELETE /api/stores/:id/vibes
 POST   /api/stores/:id/claim
+GET    /api/staff-picks?city=&storeId=&limit=
+POST   /api/stores/:id/staff-picks
 GET    /api/events?city=&from=&to=&storeId=
 POST   /api/events                 POST /api/events/:id/rsvp   DELETE /api/events/:id/rsvp
 GET    /api/books/search?q=
@@ -122,7 +146,7 @@ GET    /api/friends                POST /api/friends
 POST   /api/friends/:handle/accept | /decline
 GET    /api/users/:handle          GET /api/feed
 GET    /api/recommendations
-GET    /api/admin/queue            POST /api/admin/events/:id | /claims/:id
+GET    /api/admin/queue            POST /api/admin/events/:id | /claims/:id | /staff-picks/:id
 ```
 
 ## Security notes
@@ -138,4 +162,5 @@ GET    /api/admin/queue            POST /api/admin/events/:id | /claims/:id
 - OSM coverage is uneven and occasionally stale; hours and websites need shop confirmation.
 - Vibe tags start empty and are community- or owner-supplied, so recommendations are thin until readers use them.
 - Events are empty until bookshops post or a calendar is imported.
+- Staff picks are empty until a shop claims its listing and submits one, so the city strip stays hidden until the first pick is approved.
 - The map uses the public OSM tile service, which is fine for a pilot but should move to self-hosted Protomaps PMTiles on R2 before real traffic.
