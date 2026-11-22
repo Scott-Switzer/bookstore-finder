@@ -651,6 +651,8 @@ document.querySelector("#clear-filters").addEventListener("click", () => {
 document.querySelector("#change-city").addEventListener("click", () => {
   activeCity = null;
   explorer.hidden = true;
+  picksSection.hidden = true;
+  cityPicks.innerHTML = "";
   if (markersLayer) markersLayer.clearLayers();
   for (const set of selectedTags.values()) set.clear();
   searchInput.value = "";
