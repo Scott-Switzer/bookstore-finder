@@ -49,6 +49,7 @@ if (claimForm) {
       claimSection.hidden = true;
     } catch (error) {
       toast(error.message, "error");
+    } finally {
       button.disabled = false;
     }
   });

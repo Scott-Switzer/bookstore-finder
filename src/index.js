@@ -584,7 +584,7 @@ async function postSaveStaffPick(request, env, { id }) {
     .bind(user.id, book.id)
     .first();
   if (!existingShelf) {
-    await env.DB.prepare("INSERT INTO shelf (user_id, book_id, status) VALUES (?, ?, 'want')")
+    await env.DB.prepare("INSERT OR IGNORE INTO shelf (user_id, book_id, status) VALUES (?, ?, 'want')")
       .bind(user.id, book.id)
       .run();
   }
@@ -1206,7 +1206,7 @@ async function getShopPage(request, env, id, url) {
             <p class="detail-pick-title">${escapeHtml(pick.title)}${pick.author ? ` <small>by ${escapeHtml(pick.author)}</small>` : ""}</p>
             <p class="detail-pick-note">“${escapeHtml(pick.note)}”</p>
             <p class="detail-pick-credit">${pick.bookseller ? `${escapeHtml(pick.bookseller)} · ` : ""}${pick.source === "editor" ? "bookloop pick" : "shop pick"}${pick.section ? ` · ${escapeHtml(pick.section)}` : ""}</p>
-            <p><button class="btn btn-small ${pick.saved ? "btn-following" : ""}" type="button" data-save-pick="${escapeHtml(pick.id)}" ${pick.saved ? "disabled" : ""}>${pick.saved ? "On your shelf ✓" : "Save to shelf"}</button></p>
+            <p><button class="btn btn-small ${pick.saved ? "btn-following" : ""}" type="button" data-save-pick="${escapeHtml(pick.id)}" aria-label="Save ${escapeHtml(pick.title)} to your shelf" ${pick.saved ? "disabled" : ""}>${pick.saved ? "On your shelf ✓" : "Save to shelf"}</button></p>
           </li>`,
         )
         .join("")}</ul>`

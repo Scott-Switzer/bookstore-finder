@@ -430,6 +430,7 @@ export async function saveStaffPick(pickId, button) {
   try {
     const result = await api(`/api/staff-picks/${encodeURIComponent(pickId)}/save`, { method: "POST" });
     button.textContent = "On your shelf ✓";
+    button.setAttribute("aria-label", `${result.book.title} is on your shelf`);
     button.classList.add("btn-following");
     toast(result.alreadyOnShelf ? "Already on your shelf" : `Saved “${result.book.title}” to your shelf`);
     return true;

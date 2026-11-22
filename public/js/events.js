@@ -77,7 +77,7 @@ function render() {
           </div>
           <h3>${escapeHtml(event.title)}</h3>
           <p class="event-venue">
-            ${event.store ? `<button class="link-button" type="button" data-store-city="${escapeHtml(event.store.city)}">${escapeHtml(event.store.name)}</button> <span>·</span> ${escapeHtml(event.store.neighborhood || cityName(event.store.city))}` : "Bookshop to be confirmed"}
+            ${event.store ? `<a class="link-button" href="/shop/${encodeURIComponent(event.store.id)}">${escapeHtml(event.store.name)}</a> <span>·</span> ${escapeHtml(event.store.neighborhood || cityName(event.store.city))}` : "Bookshop to be confirmed"}
           </p>
           ${event.description ? `<p class="event-desc">${escapeHtml(event.description)}</p>` : ""}
           <div class="event-actions">
@@ -95,12 +95,6 @@ function render() {
 
   for (const button of listEl.querySelectorAll("[data-rsvp]")) {
     button.addEventListener("click", () => toggleRsvp(button.dataset.rsvp, button));
-  }
-  for (const button of listEl.querySelectorAll("[data-store-city]")) {
-    button.addEventListener("click", () => {
-      citySelect.value = button.dataset.storeCity;
-      render();
-    });
   }
 }
 
