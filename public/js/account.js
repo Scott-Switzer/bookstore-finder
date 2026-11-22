@@ -7,6 +7,7 @@ import {
   initials,
   openAuth,
   relativeDays,
+  signOut,
   state,
   tagEmoji,
   tagLabel,
@@ -424,10 +425,7 @@ document.querySelector("#settings-form").addEventListener("submit", async (event
 
 document.querySelector("#recovery-help").addEventListener("click", () => openAuth("recovery"));
 
-document.querySelector("#sign-out").addEventListener("click", async () => {
-  await api("/api/auth/logout", { method: "POST" });
-  window.location.href = "/";
-});
+document.querySelector("#sign-out").addEventListener("click", signOut);
 
 /* ------------------------------------------------------------------ init */
 

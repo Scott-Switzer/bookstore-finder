@@ -107,16 +107,50 @@ export function toast(message, tone = "info") {
 
 /* ----------------------------------------------------------------- header */
 
+export async function signOut() {
+  try {
+    await api("/api/auth/logout", { method: "POST" });
+  } catch {
+    // Redirect regardless: the session may already be gone.
+  }
+  window.location.assign("/");
+}
+
 export function renderHeader() {
   const slot = document.querySelector("#account-slot");
   if (!slot) return;
   const user = state.me?.user;
   if (user) {
     slot.innerHTML = `
-      <a class="account-pill" href="/account">
-        <span class="account-avatar">${escapeHtml(initials(user.displayName))}</span>
-        <span>@${escapeHtml(user.handle)}</span>
-      </a>`;
+      <div class="account-menu">
+        <button class="account-pill" type="button" aria-expanded="false" aria-haspopup="true" data-account-toggle>
+          <span class="account-avatar">${escapeHtml(initials(user.displayName))}</span>
+          <span>@${escapeHtml(user.handle)}</span>
+          <span class="account-caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="account-popover" hidden>
+          <p class="account-popover-name">${escapeHtml(user.displayName)}</p>
+          <a href="/account">My shelf</a>
+          <button type="button" data-sign-out>Sign out</button>
+        </div>
+      </div>`;
+    const toggle = slot.querySelector("[data-account-toggle]");
+    const popover = slot.querySelector(".account-popover");
+    const closeMenu = () => {
+      popover.hidden = true;
+      toggle.setAttribute("aria-expanded", "false");
+    };
+    toggle.addEventListener("click", () => {
+      popover.hidden = !popover.hidden;
+      toggle.setAttribute("aria-expanded", String(!popover.hidden));
+    });
+    slot.querySelector("[data-sign-out]").addEventListener("click", signOut);
+    document.addEventListener("click", (event) => {
+      if (!slot.contains(event.target)) closeMenu();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") closeMenu();
+    });
   } else {
     slot.innerHTML = `<button class="account-pill" type="button" data-auth-open>Sign in</button>`;
     slot.querySelector("[data-auth-open]").addEventListener("click", () => openAuth("signin"));

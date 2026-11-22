@@ -72,6 +72,73 @@
   border: 2px solid var(--ink);
 }
 
+.account-menu {
+  position: relative;
+}
+
+.account-caret {
+  font-size: 9px;
+  line-height: 1;
+  opacity: 0.7;
+}
+
+.account-popover {
+  position: absolute;
+  top: calc(100% + 9px);
+  right: 0;
+  z-index: 60;
+  min-width: 178px;
+  padding: 6px;
+  display: grid;
+  gap: 2px;
+  background: #fffdf7;
+  border: 2px solid var(--ink);
+  border-radius: 14px;
+  box-shadow: 0 6px 0 rgba(41, 35, 61, 0.14);
+}
+
+.account-popover[hidden] {
+  display: none;
+}
+
+.account-popover-name {
+  margin: 0 0 4px;
+  padding: 7px 10px 8px;
+  border-bottom: 1px dashed rgba(41, 35, 61, 0.24);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.account-popover a,
+.account-popover button {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.account-popover a:hover,
+.account-popover button:hover {
+  background: var(--yellow);
+}
+
+.account-popover a:focus-visible,
+.account-popover button:focus-visible {
+  outline: 3px solid var(--orange);
+  outline-offset: 1px;
+}
+
 .live-banner {
   display: flex;
   align-items: center;
